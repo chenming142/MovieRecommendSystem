@@ -1,18 +1,26 @@
 package com.lds.DataLoader
 
-import java.net.InetAddress
+import co.elastic.clients.elasticsearch.ElasticsearchClient
+import co.elastic.clients.elasticsearch.indices.{CreateIndexRequest, DeleteIndexRequest, ExistsRequest}
+import co.elastic.clients.json.jackson.JacksonJsonpMapper
+import co.elastic.clients.transport.ElasticsearchTransport
+import co.elastic.clients.transport.rest_client.RestClientTransport
 
+import java.net.InetAddress
 import com.mongodb.casbah.Imports.MongoDBObject
 import com.mongodb.casbah.{MongoClient, MongoClientURI}
+import org.apache.http.HttpHost
 import org.apache.spark.SparkConf
 import org.apache.spark.rdd.RDD
 import org.apache.spark.sql.{DataFrame, SparkSession}
-import org.elasticsearch.action.admin.indices.create.CreateIndexRequest
-import org.elasticsearch.action.admin.indices.delete.DeleteIndexRequest
-import org.elasticsearch.action.admin.indices.exists.indices.IndicesExistsRequest
-import org.elasticsearch.common.settings.Settings
-import org.elasticsearch.common.transport.InetSocketTransportAddress
-import org.elasticsearch.transport.client.PreBuiltTransportClient
+import org.elasticsearch.client.RestClient
+//import org.elasticsearch.action.admin.indices.create.CreateIndexRequest
+//import org.elasticsearch.action.admin.indices.delete.DeleteIndexRequest
+//import org.elasticsearch.action.admin.indices.exists.indices.IndicesExistsRequest
+//import org.elasticsearch.common.settings.Settings
+//import org.elasticsearch.common.transport.TransportAddress
+//import org.elasticsearch.common.transport.InetSocketTransportAddress
+//import org.elasticsearch.transport.client.PreBuiltTransportClient
 
 // 定义样例类
 case class Movie(mid: Int, name: String, descri: String, timelong: String,issue: String,shoot: String, language: String, genres:String, actors: String,directors: String)
@@ -22,9 +30,9 @@ case class MongoConfig(uri:String, db:String)
 case class ESConfig(httpHosts:String, transportHosts:String, index:String,clustername: String)
 
 object DataLoader {
-  val MOVIE_DATA_PATH = "C:\\dev\\Progam Files\\MovieRecommendSystem\\recommender\\DataLoader\\src\\main\\resources\\movies.csv"
-  val RATING_DATA_PATH = "C:\\dev\\Progam Files\\MovieRecommendSystem\\recommender\\DataLoader\\src\\main\\resources\\ratings.csv"
-  val TAG_DATA_PATH = "C:\\dev\\Progam Files\\MovieRecommendSystem\\recommender\\DataLoader\\src\\main\\resources\\tags.csv"
+  val MOVIE_DATA_PATH = "H:\\bigdata\\MovieRecommendSystem\\recommender\\DataLoader\\src\\main\\resources\\movies.csv"
+  val RATING_DATA_PATH = "H:\\bigdata\\MovieRecommendSystem\\recommender\\DataLoader\\src\\main\\resources\\ratings.csv"
+  val TAG_DATA_PATH = "H:\\bigdata\\MovieRecommendSystem\\recommender\\DataLoader\\src\\main\\resources\\tags.csv"
   val MONGODB_MOVIE_COLLECTION = "Movie"
   val MONGODB_RATING_COLLECTION = "Rating"
   val MONGODB_TAG_COLLECTION = "Tag"
@@ -34,12 +42,13 @@ object DataLoader {
     "spark.cores" -> "local[*]",
     "mongo.uri" -> "mongodb://localhost:27017/recommender_movie",
     "mongo.db" -> "recommender_movie",
-    "es.httpHosts" -> "localhost:9200",
-    "es.transportHosts" -> "localhost:9300",
+    "es.httpHosts" -> "localhost:1001",
+    "es.transportHosts" -> "localhost:9301",
     "es.index" -> "recommender_movie",
-    "es.cluster.name" -> "elasticsearch")
+    "es.cluster.name" -> "elasticsearch-cluster")
 
   def main(args: Array[String]): Unit = {
+    System.setProperty("es.set.netty.runtime.available.processors", "false");
     // 创建一个SparkConf配置
     val sparkConf = new SparkConf().setMaster(config("spark.cores")).setAppName("DataLoader")
     val spark = SparkSession.builder().config(sparkConf).getOrCreate()
@@ -83,7 +92,7 @@ object DataLoader {
     val movieWithTagsDF = movieDF.join(newTag, Seq("mid", "mid"), "left")
 
     //TODO 需要将新的Movie数据保存到ES中
-   // storeDataInES(movieWithTagsDF)
+    storeDataInES(movieWithTagsDF)
     // 关闭Spark
     spark.stop()
 
@@ -131,28 +140,39 @@ object DataLoader {
   }
 
   def storeDataInES(movieDF: DataFrame)(implicit eSConfig: ESConfig): Unit ={
-    // 新建es配置
-    val settings: Settings = Settings.builder().put("cluster.name", eSConfig.clustername).build()
+//    // 新建es配置
+//    val settings: Settings = Settings.builder()
+//      .put("cluster.name", eSConfig.clustername)
+//      .put("client.transport.sniff", true)
+//      .build()
+//
+//    // 新建一个es客户端
+//    val esClient = new PreBuiltTransportClient(settings)
+//
+//    val REGEX_HOST_PORT = "(.+):(\\d+)".r
+//    eSConfig.transportHosts.split(",").foreach{
+//      case REGEX_HOST_PORT(host: String, port: String) => {
+//        esClient.addTransportAddress(new TransportAddress( InetAddress.getByName(host), port.toInt ))
+//      }
+//    }
+//
+//    // 先清理遗留的数据
+//    if( esClient.admin().indices().exists( new IndicesExistsRequest(eSConfig.index) )
+//      .actionGet()
+//      .isExists
+//    ){
+//      esClient.admin().indices().delete( new DeleteIndexRequest(eSConfig.index) )
+//    }
+//
+//    esClient.admin().indices().create( new CreateIndexRequest(eSConfig.index) )
 
-    // 新建一个es客户端
-    val esClient = new PreBuiltTransportClient(settings)
-
-    val REGEX_HOST_PORT = "(.+):(\\d+)".r
-    eSConfig.transportHosts.split(",").foreach{
-      case REGEX_HOST_PORT(host: String, port: String) => {
-        esClient.addTransportAddress(new InetSocketTransportAddress( InetAddress.getByName(host), port.toInt ))
-      }
+    val restClient = RestClient.builder(new HttpHost("localhost", 1001, "http")).build()
+    val elasticsearchClient = new ElasticsearchClient(new RestClientTransport(restClient, new JacksonJsonpMapper()))
+    val existsIndice = elasticsearchClient.indices().exists(new ExistsRequest.Builder().index(eSConfig.index).build()).value()
+    if ( existsIndice ) {
+      elasticsearchClient.indices().delete(new DeleteIndexRequest.Builder().index(eSConfig.index).build())
     }
-
-    // 先清理遗留的数据
-    if( esClient.admin().indices().exists( new IndicesExistsRequest(eSConfig.index) )
-      .actionGet()
-      .isExists
-    ){
-      esClient.admin().indices().delete( new DeleteIndexRequest(eSConfig.index) )
-    }
-
-    esClient.admin().indices().create( new CreateIndexRequest(eSConfig.index) )
+    elasticsearchClient.indices().create(new CreateIndexRequest.Builder().index(eSConfig.index).build())
 
     movieDF.write
       .option("es.nodes", eSConfig.httpHosts)
@@ -160,7 +180,7 @@ object DataLoader {
       .option("es.mapping.id", "mid")
       .mode("overwrite")
       .format("org.elasticsearch.spark.sql")
-      .save(eSConfig.index + "/" + ES_MOVIE_INDEX)
+      .save(eSConfig.index)
   }
 
 }
