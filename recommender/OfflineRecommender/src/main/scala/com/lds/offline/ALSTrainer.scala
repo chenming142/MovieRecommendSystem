@@ -73,7 +73,5 @@ object ALSTrainer {
       }
     // 按照rmse排序
     println(result.sortBy(_._3).head)
-
   }
-
 }

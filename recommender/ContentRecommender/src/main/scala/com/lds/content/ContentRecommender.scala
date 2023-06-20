@@ -28,7 +28,7 @@ object ContentRecommender {
   def main(args: Array[String]): Unit = {
     val config = Map(
       "spark.cores" -> "local[*]",
-      "mongo.uri" -> "mongodb://192.168.230.1:27017/recommender_movie",
+      "mongo.uri" -> "mongodb://localhost:27017/recommender_movie",
       "mongo.db" -> "recommender_movie"
     )
 

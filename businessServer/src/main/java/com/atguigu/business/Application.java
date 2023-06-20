@@ -29,7 +29,6 @@ import org.springframework.context.ApplicationContext;
  */
 public class Application {
 
-
     public static void main(String[] args) throws IOException, ExecutionException, InterruptedException {
 
         ApplicationContext context = new ClassPathXmlApplicationContext("classpath:application.xml");

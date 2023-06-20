@@ -80,6 +80,9 @@ object DataLoader {
       Tag(attr(0).toInt, attr(1).toInt, attr(2).trim, attr(3).toInt)
     }).toDF()
 
+    movieDF.persist()
+    tagDF.persist()
+
     //TODO 将数据保存到MongoDB中
     storeDataInMongoDB(movieDF, ratingDF, tagDF)
 
@@ -89,10 +92,12 @@ object DataLoader {
       .agg(concat_ws("|", collect_set($"tag"))
         .as("tags"))
       .select("mid", "tags")
-    val movieWithTagsDF = movieDF.join(newTag, Seq("mid", "mid"), "left")
+    val movieWithTagsDF = movieDF.join(newTag, Seq("mid", "mid"), "left_outer")
 
+//    movieWithTagsDF.sort("mid").take(10).foreach(println)
+    val movieTagsDF = movieWithTagsDF.select("mid", "name","descri","timelong","issue","shoot","language","genres","actors","directors","tags")
     //TODO 需要将新的Movie数据保存到ES中
-    storeDataInES(movieWithTagsDF)
+    storeDataInES(movieTagsDF)
     // 关闭Spark
     spark.stop()
 

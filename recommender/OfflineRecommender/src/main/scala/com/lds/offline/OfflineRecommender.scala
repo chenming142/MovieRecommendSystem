@@ -38,14 +38,13 @@ object OfflineRecommender {
     )
 
     val sparkConf = new SparkConf().setMaster(config("spark.cores")).setAppName("OfflineRecommender")
-
+    // The DefaultMongoPartitioner requires MongoDB >= 3.2
+    sparkConf.set("spark.mongodb.input.partitioner", "MongoShardedPartitioner")
+    sparkConf.set("spark.mongodb.input.partitionerOptions.shardkey", "_id")
     // 创建一个SparkSession
     val spark = SparkSession.builder().config(sparkConf).getOrCreate()
-
     import spark.implicits._
-
     implicit val mongoConfig = MongoConfig(config("mongo.uri"), config("mongo.db"))
-
 
     // 加载数据
     val ratingRDD = spark.read
@@ -71,22 +70,33 @@ object OfflineRecommender {
       .map(_.mid)    // 转化成rdd，并且去掉时间戳
       .cache()
 
-    // 训练隐语义模型
+    // 训练隐语义模型 (uid mid score)
     val trainData = ratingRDD.map( x => Rating(x._1, x._2, x._3) )
 
     val (rank, iterations, lambda) = (200, 5, 0.1)
+    // 训练ALS（Alternatingleast squares）-交替最小二乘法模型
+    /**
+     *  ALS模型需要4个参数
+     *  1）trainData-训练数据(训练集)：Rating对象的RDD，包含用户ID、物品ID，偏好值
+     *  2）Rank-特征维度（特征值，它越大越好）：50
+     *  3）Iterations-迭代次数（也是越大越好）：5次（根据自己的算力和用户需求来设置）
+     *  4）Lambda-防过拟合参数（跨度）：0.01
+     */
     val model = ALS.train(trainData, rank, iterations, lambda)
 
     // 基于用户和电影的隐特征，计算预测评分，得到用户的推荐列表
+
+    // --- 基于用户隐特征 ---------------------------------------
     // 计算user和movie的笛卡尔积，得到一个空评分矩阵
-    val userMovies = userRDD.cartesian(movieRDD)
+    val userMovies = userRDD.cartesian(movieRDD.distinct())
 
     // 调用model的predict方法预测评分
+    // 连带模型和做好笛卡儿积之后的表得出预测数据
     val preRatings = model.predict(userMovies)
 
     val userRecs = preRatings
       .filter(_.rating > 0)    // 过滤出评分大于0的项
-      .map(rating => ( rating.user, (rating.product, rating.rating) ) )
+      .map(rating => ( rating.user, (rating.product, rating.rating) ))
       .groupByKey()
       .map{
         case (uid, recs) => UserRecs( uid, recs.toList.sortWith(_._2>_._2).take(USER_MAX_RECOMMENDATION).map(x=>Recommendation(x._1, x._2)) )
@@ -100,6 +110,7 @@ object OfflineRecommender {
       .format("com.mongodb.spark.sql")
       .save()
 
+    // --- 基于电影隐特征 ---------------------------------------
     // 基于电影隐特征，计算相似度矩阵，得到电影的相似度列表
     val movieFeatures = model.productFeatures.map{
       case (mid, features) => (mid, new DoubleMatrix(features))
